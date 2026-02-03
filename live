@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+app_speed_fix.py
+- 최적화: 고속 리샘플링(Slicing), 큐 적체 방지, 환각 방지
+"""
+
+import os
+import sys
+import signal
+import queue
+import datetime as dt
+import numpy as np
+
+print("📦 라이브러리 로딩 중...")
+try:
+    import pyaudiowpatch as pa
+    from faster_whisper import WhisperModel
+    from deep_translator import GoogleTranslator
+except ImportError as e:
+    print(f"❌ 필수 라이브러리 누락: {e}")
+    sys.exit(1)
+
+# =========================================================
+# ⚡ 설정 (속도 최적화)
+# =========================================================
+# tiny가 가장 빠릅니다. base도 느리다면 tiny로 바꾸세요.
+WHISPER_MODEL = "tiny" 
+CHUNK_SECONDS = 4.0    # 1.5초는 문장이 너무 잘려서 오히려 인식이 안될 수 있음 (2초 권장)
+TARGET_SR = 16000
+# =========================================================
+
+# 구글 번역기
+translator = GoogleTranslator(source='en', target='ko')
+
+def main():
+    global STOP
+    signal.signal(signal.SIGINT, lambda s,f: globals().update(STOP=True))
+
+    print(f"🧠 Whisper 모델({WHISPER_MODEL}) 로딩 중...")
+    # cpu_threads를 물리 코어 수에 맞추는 것이 좋습니다 (보통 4~8)
+    model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8", cpu_threads=4)
+    
+    p = pa.PyAudio()
+    try:
+        # Loopback 장치 찾기
+        wasapi = p.get_host_api_info_by_type(pa.paWASAPI)
+        default_out = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
+        
+        target = None
+        for i in range(p.get_device_count()):
+            dev = p.get_device_info_by_index(i)
+            if dev["hostApi"] == wasapi["index"] and dev["maxInputChannels"] > 0:
+                if dev["name"] == default_out["name"] or "Loopback" in dev["name"]:
+                    target = dev
+                    break
+        if not target: target = p.get_default_input_device_info()
+        
+        print(f"🎤 캡처 장치: {target['name']}")
+        native_rate = int(target["defaultSampleRate"])
+        
+        q = queue.Queue()
+        def callback(in_data, frame_count, time_info, status):
+            q.put(np.frombuffer(in_data, dtype=np.float32))
+            return (in_data, pa.paContinue)
+            
+        stream = p.open(format=pa.paFloat32, channels=target["maxInputChannels"],
+                        rate=native_rate, input=True,
+                        input_device_index=target["index"], stream_callback=callback)
+        
+        stream.start_stream()
+        print(f"\n🚀 고속 자막 모드 시작!")
+        
+        buf = []
+        cur_len = 0
+        req_len = int(native_rate * CHUNK_SECONDS)
+        
+        while not STOP:
+            try:
+                # 큐에 데이터가 너무 많이 쌓이면(렉 발생 시) 최신 데이터만 남기고 버림 (Latnecy 방지 핵심)
+                if q.qsize() > 10:
+                    print("⚠️ 데이터 적체 발생! 큐 초기화 (실시간성 유지)")
+                    while not q.empty(): q.get()
+                    buf = []
+                    cur_len = 0
+                    continue
+
+                data = q.get(timeout=0.1)
+                
+                # 스테레오 -> 모노 변환 (평균값 사용)
+                if target["maxInputChannels"] > 1:
+                    data = data.reshape(-1, target["maxInputChannels"]).mean(axis=1)
+                
+                buf.append(data)
+                cur_len += len(data)
+                
+                if cur_len >= req_len:
+                    audio = np.concatenate(buf)
+                    buf = []
+                    cur_len = 0
+                    
+                    # [최적화 1] 고속 리샘플링 (Slicing)
+                    # np.interp 대신 배열 슬라이싱 사용. 품질은 약간 떨어지지만 속도는 100배 빠름
+                    # 보통 48000Hz -> 16000Hz 이므로 3칸씩 건너뛰면 됨
+                    step = int(native_rate / TARGET_SR)
+                    if step > 0:
+                        audio = audio[::step]
+                    
+                    # [최적화 2] 환각 방지 설정 추가
+                    # condition_on_previous_text=False: 이전 문맥 무시 (짧은 문장 인식 속도 향상 및 환각 방지)
+                    segs, _ = model.transcribe(
+                        audio, 
+                        language="en", 
+                        beam_size=1, 
+                        vad_filter=True,
+                        condition_on_previous_text=False 
+                    )
+                    
+                    text = " ".join([s.text.strip() for s in segs if s.text.strip()])
+                    
+                    if text:
+                        # [최적화 3] 번역 예외 처리
+                        # 번역기가 느려서 멈추는 것을 방지
+                        try:
+                            ko = translator.translate(text)
+                        except Exception:
+                            ko = "(번역 지연...)"
+                        
+
+            except queue.Empty: pass
+            
+        stream.stop_stream()
+        stream.close()
+    except Exception as e:
+        print(f"에러: {e}")
+    finally:
+        p.terminate()
+
+if __name__ == "__main__":
+    main()
