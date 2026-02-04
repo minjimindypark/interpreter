@@ -1,79 +1,77 @@
-🚀 Real-Time AI Translator (WASAPI Loopback)
-A high-performance Python tool that captures Windows system audio (WASAPI Loopback) in real-time, transcribes English speech, and translates it into Korean instantly.
+🎧 Real-time PC Audio Translator
+A Python tool that captures internal computer audio (YouTube, Netflix, Zoom meetings, etc.) in real-time, transcribes English speech, and translates it into Korean subtitles directly in your terminal.
 
-This version is highly optimized for speed (low latency), supports mono headsets (like Jabra), and runs entirely in the console without saving log files.
+Unlike standard dictation tools, this captures System Audio (Loopback), meaning it works perfectly with headphones without needing a microphone input.
 
 ✨ Key Features
-Real-Time Audio Capture: Uses pyaudiowpatch to capture system audio (Loopback) directly.
+System Audio Capture: Listens to what your computer is playing, not your microphone.
 
-Ultra-Fast STT: Powered by faster-whisper (default: tiny model) for low-latency speech recognition on CPUs.
+Faster-Whisper: Powered by an optimized version of OpenAI's Whisper model for fast CPU inference (Default: tiny.en).
 
-Instant Translation: Uses Google Translate API for English-to-Korean translation.
+Real-time Translation: Instantly translates transcribed English into Korean using deep_translator.
 
-Performance Optimizations:
+Clean UI (Refresh Mode): Refreshes the terminal screen (cls/clear) continuously to prevent duplicate text or scrolling issues, ensuring a clean subtitle experience.
 
-High-Speed Resampling: Uses numpy slicing instead of interpolation (100x faster).
+VAD (Voice Activity Detection): Automatically ignores silence to save processing power and keep the output clean.
 
-Queue Management: Automatically drops old data to prevent latency buildup.
+🛠️ Prerequisites
+This project is optimized for Windows environments (specifically for WASAPI Loopback support).
 
-Hallucination Filter: Prevents Whisper from generating random text during silence.
+Python 3.8 or higher
 
-Robust Device Support: Includes a fix for the PaErrorCode -9998 error, enabling support for 1-channel (Mono) headsets like Jabra in Loopback mode.
+FFmpeg (Required for audio processing in Whisper)
 
-📋 Prerequisites
-Before running the script, ensure you have the following installed:
+📦 Installation
+Clone this repository or download the interpreter.py file.
 
-Python 3.10 or higher (3.11 recommended)
-
-FFmpeg: Required for audio processing. Download FFmpeg and add it to your system PATH.
-
-Microsoft Visual C++ Redistributable: Required for PyTorch/Whisper. Download here.
-
-🛠️ Installation
-Clone this repository or download the script.
-
-Install the required Python packages:
+Install the required Python libraries:
 
 Bash
-pip install pyaudiowpatch faster-whisper deep-translator numpy
-Note on Models: Unlike previous versions that required manual dictionary downloads (e.g., Argos Translate), this version uses the Google Translate API. However, the Whisper model (approx. 70MB for tiny) will be downloaded automatically the first time you run the script.
+pip install faster-whisper deep-translator pyaudiowpatch scipy numpy
+Note: pyaudiowpatch is a fork of PyAudio that supports WASAPI Loopback (system audio capture) on Windows.
 
 🚀 Usage
-Run the script directly with Python:
+Run the script:
 
 Bash
-interpreter.py
-Stop: Press Ctrl + C to exit.
+python interpreter.py
+Wait for the message ✅ Connected: ... in the console.
+
+Play any content containing English speech (YouTube, movies, podcasts) on your PC.
+
+The terminal will display the live transcription and translation.
 
 ⚙️ Configuration
-You can adjust the settings at the top of the app_manual3_nolog.py file:
+You can adjust the settings at the top of interpreter.py to fit your needs:
 
 Python
-# Model Size: tiny < base < small
-# 'tiny' is the fastest. 'base' offers slightly better accuracy but is slower.
-WHISPER_MODEL = "tiny" 
-
-# Chunk Size (Seconds)
-# Recommended: 2.0 ~ 4.0. 
-# Too short (<1.5s) may cut off sentences; too long (>5s) increases latency.
-CHUNK_SECONDS = 4.0    
+# ==================================================================
+# 🔧 System Settings
+# ==================================================================
+MODEL_SIZE = "tiny.en"     # Model size (tiny.en, base.en, small.en, etc.)
+                           # Use 'base.en' if you have a decent CPU.
+TARGET_SR = 16000          # Target Sample Rate (Do not change)
+VAD_THRESHOLD = 0.015      # Noise threshold (Increase if background noise is detected)
+UPDATE_INTERVAL = 0.3      # Screen refresh rate (Lower = more responsive)
+SILENCE_TIMEOUT = 0.8      # Seconds of silence required to finalize a sentence
+# ==================================================================
 ⚠️ Troubleshooting
-Q. Error: Error opening InputStream: Invalid number of channels [PaErrorCode -9998]
+Error: ❌ No device found / Device not found
 
-This script includes a patch for Mono headsets. However, if the error persists, check your Windows Sound Settings:
+Ensure your speakers or headphones are connected and set as the Default Output Device in Windows Sound Settings.
 
-Go to Sound Control Panel -> Playback tab.
+This tool relies on WASAPI Loopback; ensure no exclusive mode application is blocking audio access.
 
-Right-click your device -> Properties -> Advanced tab.
+Translation is too slow:
 
-Uncheck both boxes under "Exclusive Mode" (Allow applications to take exclusive control...).
+Ensure MODEL_SIZE is set to "tiny.en".
 
-Q. The translation is delayed.
-
-Ensure WHISPER_MODEL is set to "tiny".
-
-Delays may occur depending on your internet connection speed (due to Google Translate API).
+You can adjust cpu_threads=4 in the code to match your processor's capabilities.
 
 
-📜 License
-This project is intended for educational and research purposes.
+Libraries Used
+Faster-Whisper
+
+Deep Translator
+
+PyAudioWPatch
