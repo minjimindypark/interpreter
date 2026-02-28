@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import queue
 import threading
@@ -21,6 +22,24 @@ SILENCE_TIMEOUT = 0.6      # 0.6초 조용하면 문장 확정 (0.8 → 0.6으�
 PREROLL_CHUNKS = 3         # 프리롤 버퍼 크기 (0.3초 = 3 chunks × 0.1초)
 ASYNC_TRANSLATION_MIN_CHANGE = 10  # 비동기 번역 트리거 최소 글자 변화량
 # ==================================================================
+
+# 문장 종료 부호 감지 (숫자 속 마침표, 줄임표 제외)
+SENTENCE_END_PATTERN = re.compile(r'(?<!\d)(?<!\.)([.!?])(?=\s|$)')
+
+
+def split_sentences(text):
+    """텍스트에서 완성된 문장과 미완성 나머지를 분리"""
+    matches = list(SENTENCE_END_PATTERN.finditer(text))
+    if not matches:
+        return [], text  # 완성된 문장 없음
+
+    last_match = matches[-1]
+    split_pos = last_match.end()
+
+    completed = text[:split_pos].strip()
+    remaining = text[split_pos:].strip()
+
+    return [completed], remaining
 
 # ── Step 4: Windows ANSI VT100 활성화 ─────────────────────────────
 if os.name == 'nt':
@@ -219,12 +238,38 @@ def process_worker():
                 if len(raw_text) > 1:
                     # Step 1: prefix-lock 안정화
                     stable_text = stabilize_text(current_sentence, raw_text)
-                    current_sentence = stable_text
 
-                    # Step 2: 비동기 번역 요청 (partial)
-                    async_translator.request(stable_text, is_final=False)
+                    # 문장 종료 부호 감지 → 즉시 확정
+                    completed_sentences, remaining = split_sentences(stable_text)
 
-                    _ansi_redraw(history, stable_text, async_translator.current, is_partial=True)
+                    if completed_sentences:
+                        for sentence in completed_sentences:
+                            async_translator.request(sentence, is_final=True)
+                            translation = async_translator.current
+                            history.append(f"🇺🇸 {sentence}\n🇰🇷 {translation}")
+                            if len(history) > 3:
+                                history.pop(0)
+
+                        current_sentence = remaining
+
+                        # 오디오 버퍼 정리: 나머지 텍스트 비율만큼만 유지
+                        if remaining and stable_text:
+                            ratio = len(remaining) / len(stable_text)
+                            total_samples = sum(len(a) for a in accumulated_audio)
+                            keep_samples = int(total_samples * ratio)
+                            full_audio = np.concatenate(accumulated_audio)
+                            accumulated_audio = [full_audio[-keep_samples:]] if keep_samples > 0 else []
+                        else:
+                            accumulated_audio = []
+
+                        _ansi_redraw(history, remaining, async_translator.current, is_partial=bool(remaining))
+                    else:
+                        current_sentence = stable_text
+
+                        # Step 2: 비동기 번역 요청 (partial)
+                        async_translator.request(stable_text, is_final=False)
+
+                        _ansi_redraw(history, stable_text, async_translator.current, is_partial=True)
 
                 last_transcribe_time = time.time()
             # ─────────────────────────────────────────────────────────
